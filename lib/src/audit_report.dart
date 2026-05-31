@@ -1,20 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'color_output.dart' as c;
 import 'osv_client.dart';
 
-// ANSI color codes — skipped when stdout is not a terminal or --no-color is set.
-bool _colorize = stdout.hasTerminal;
+export 'color_output.dart' show disableColor;
 
-/// Call before printing to disable ANSI color output.
-void disableColor() => _colorize = false;
-
-String _red(String s) => _colorize ? '\x1B[31m$s\x1B[0m' : s;
-String _yellow(String s) => _colorize ? '\x1B[33m$s\x1B[0m' : s;
-String _cyan(String s) => _colorize ? '\x1B[36m$s\x1B[0m' : s;
-String _green(String s) => _colorize ? '\x1B[32m$s\x1B[0m' : s;
-String _bold(String s) => _colorize ? '\x1B[1m$s\x1B[0m' : s;
-String _dim(String s) => _colorize ? '\x1B[2m$s\x1B[0m' : s;
+String _red(String s) => c.red(s);
+String _yellow(String s) => c.yellow(s);
+String _cyan(String s) => c.cyan(s);
+String _green(String s) => c.green(s);
+String _bold(String s) => c.bold(s);
+String _dim(String s) => c.dim(s);
 
 /// Prints the full audit report to stdout as JSON and returns the number of
 /// vulnerable packages whose severity is at or above [minSeverity].
