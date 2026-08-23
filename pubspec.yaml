@@ -1,6 +1,6 @@
 name: dart_audit
 description: Security vulnerability scanner for Dart and Flutter projects. Checks all dependencies against the OSV.dev database.
-version: 0.2.0
+version: 0.3.0
 repository: https://github.com/IgnacioMan1998/dart_audit
 
 topics:

@@ -1,3 +1,60 @@
+## 0.3.0
+
+### Added
+
+- **Unicode / Trojan Source scanner** (`lib/src/inspector/unicode_scanner.dart`) — detects:
+  - Bi-directional override characters (CVE-2021-42574) — RTL/LTR overrides, embedding, and pop directional isolates (CRITICAL).
+  - Zero-width characters (U+200B–U+200F, U+2028–U+2029, U+2060–U+2064, U+FEFF) — potential invisible injection (HIGH).
+  - GlassWorm PUA carriers (U+FE00–U+FE0F variation selectors) — used to smuggle executable content (CRITICAL).
+  - Cyrillic / Greek homoglyphs in identifiers — visual spoofing of variable and function names (HIGH).
+  - Runs in parallel with regex and entropy scanners during `inspect`.
+
+- **Archive structural scanner** (`lib/src/inspector/archive_scanner.dart`) — analyses `.tar.gz` archive entries before extraction:
+  - Path-traversal detection (`../`, absolute paths, parent-segment traversal) — CRITICAL.
+  - Suspiciously high Dart-to-total file ratio — MEDIUM.
+  - Hidden executable files (`.exe`, `.dll`, `.so`, `.dylib`) — HIGH.
+  - Mixed-case filenames suggesting case-confusion on case-insensitive systems — MEDIUM.
+  - Entry count statistics exposed to the report.
+
+- **Package trust scorer** (`lib/src/inspector/trust_scorer.dart`) — queries `pub.dev` API for a published package's trust signals:
+  - Package age (days since first publish) — new packages (< 30 days) flagged as MEDIUM risk.
+  - Fresh release detection (version published < 7 days ago) — MEDIUM.
+  - Likes and download-percentile heuristics.
+  - Publisher verification status.
+  - Overall quality score from pub.dev.
+  - Asynchronous; used by both `inspect` and the new `trust` command.
+
+- **Typosquatting detector** (`lib/src/inspector/typosquat_detector.dart`) — compares local dependency names against ~80 known-popular pub.dev packages:
+  - Levenshtein distance 1 (CRITICAL) and 2 (HIGH) matches.
+  - `flutter_`, `_flutter`, `dart_`, `pub_` prefix/suffix confusion attacks (HIGH).
+  - Suspicious suffix on popular-package names (MEDIUM).
+  - Popular-package names are automatically skipped.
+
+- **Dependency confusion detector** (`lib/src/inspector/confusion_detector.dart`) — flags potential internal-package namespace confusion by detecting version inflation (a local version newer than the latest pub.dev release).
+
+- **Pubspec.yaml scanner** (`lib/src/inspector/pubspec_scanner.dart`) — analyses `pubspec.yaml` for:
+  - Wildcard / `any` version constraints.
+  - Suspicious Git hosts (non-GitHub, non-GitLab, non-Codeberg).
+  - IP addresses and raw URLs in dependency sources.
+  - Branch or tag refs (not pinned to a SHA).
+  - Path dependencies.
+  - Dependency overrides.
+  - Very old SDK constraints (`>=2` without upper bound).
+
+- **`trust` sub-command** — `dart_audit trust <package>` queries the pub.dev API and prints a trust assessment: age, release freshness, publisher verification, likes, downloads, and quality score.
+
+- **`typosquat` sub-command** — `dart_audit typosquat` reads the project's `pubspec.lock` and runs both the typosquatting detector and the dependency confusion detector against all listed dependencies.
+
+- **Updated `inspect` output** — the `inspect` command now prints Unicode findings, archive findings, and a trust assessment section alongside the existing regex and entropy results.
+
+### Changed
+
+- `inspect` now runs 4 scanner layers in parallel: regex, entropy, Unicode, and archive analysis.
+- `PackageInspector` exposes `unicodeFindings`, `archiveReport`, and `trustAssessment` on `InspectionReport`.
+- `TyposquatDetector` now skips local packages that are themselves known-popular packages.
+
+---
+
 ## 0.2.0
 
 ### Added
