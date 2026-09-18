@@ -12,8 +12,11 @@ import 'package:dart_audit/src/inspector/package_inspector.dart';
 import 'package:dart_audit/src/inspector/trust_scorer.dart';
 import 'package:dart_audit/src/inspector/typosquat_detector.dart';
 import 'package:dart_audit/src/inspector/confusion_detector.dart';
+import 'package:dart_audit/src/git_hook_manager.dart';
+import 'package:dart_audit/src/safe_package_adder.dart';
 import 'package:dart_audit/src/lockfile_parser.dart';
 import 'package:dart_audit/src/osv_client.dart';
+
 
 String _readVersion() {
   try {
@@ -98,6 +101,7 @@ void main(List<String> args) async {
       allowed: ['text', 'json'],
       defaultsTo: 'text',
     )
+    ..addFlag('no-color', help: 'Disable ANSI color output.', negatable: false)
     ..addFlag('help', abbr: 'h', help: 'Show this help.', negatable: false);
 
   // ── `typosquat` sub-command ─────────────────────────────────────────────────
@@ -114,13 +118,29 @@ void main(List<String> args) async {
       allowed: ['text', 'json'],
       defaultsTo: 'text',
     )
+    ..addFlag('no-color', help: 'Disable ANSI color output.', negatable: false)
+    ..addFlag('help', abbr: 'h', help: 'Show this help.', negatable: false);
+
+  // ── `add` sub-command ───────────────────────────────────────────────────────
+  final addParser = ArgParser()
+    ..addFlag('dev', abbr: 'd', help: 'Add as dev dependency.', negatable: false)
+    ..addFlag('force', help: 'Force installation even if security risks are detected.', negatable: false)
+    ..addFlag('no-color', help: 'Disable ANSI color output.', negatable: false)
+    ..addFlag('help', abbr: 'h', help: 'Show this help.', negatable: false);
+
+  // ── `hook` sub-command ──────────────────────────────────────────────────────
+  final hookParser = ArgParser()
+    ..addFlag('remove', help: 'Remove the pre-commit hook instead of installing it.', negatable: false)
+    ..addFlag('no-color', help: 'Disable ANSI color output.', negatable: false)
     ..addFlag('help', abbr: 'h', help: 'Show this help.', negatable: false);
 
   globalParser
     ..addCommand('audit', auditParser)
     ..addCommand('inspect', inspectParser)
     ..addCommand('trust', trustParser)
-    ..addCommand('typosquat', typosquatParser);
+    ..addCommand('typosquat', typosquatParser)
+    ..addCommand('add', addParser)
+    ..addCommand('hook', hookParser);
 
   // ── Parse ───────────────────────────────────────────────────────────────────
   late final ArgResults global;
@@ -156,11 +176,16 @@ void main(List<String> args) async {
       await _runTrust(command, trustParser, version);
     case 'typosquat':
       await _runTyposquat(command, typosquatParser, version);
+    case 'add':
+      await _runAdd(command, addParser, version);
+    case 'hook':
+      await _runHook(command, hookParser, version);
     default:
       // 'audit' is also the default when no sub-command name matches.
       await _runAudit(command.name == 'audit' ? command : command, auditParser, version);
   }
 }
+
 
 // ── audit sub-command ──────────────────────────────────────────────────────────
 
@@ -361,7 +386,13 @@ Future<void> _runTrust(ArgResults opts, ArgParser parser, String version) async 
   }
 
   final scorer = TrustScorer();
-  final info = await scorer.assess(packageName);
+  PackageTrustInfo? info;
+  try {
+    info = await scorer.assess(packageName);
+  } on TrustScorerException catch (error) {
+    stderr.writeln('Error: ${error.message}');
+    exit(1);
+  }
 
   if (info == null) {
     stderr.writeln('Error: Package "$packageName" not found on pub.dev.');
@@ -532,6 +563,128 @@ Future<void> _runTyposquat(ArgResults opts, ArgParser parser, String version) as
   exit(hasCritical ? 1 : 0);
 }
 
+// ── add sub-command ────────────────────────────────────────────────────────────
+
+Future<void> _runAdd(ArgResults opts, ArgParser parser, String version) async {
+  if (opts['help'] as bool) {
+    stdout.writeln('dart_audit $version add — Safely audit and add a package to pubspec.yaml');
+    stdout.writeln();
+    stdout.writeln('Usage: dart_audit add <package> [version] [options]');
+    stdout.writeln();
+    stdout.writeln(parser.usage);
+    stdout.writeln();
+    stdout.writeln('Examples:');
+    stdout.writeln('  dart_audit add http');
+    stdout.writeln('  dart_audit add http 1.2.0');
+    stdout.writeln('  dart_audit add --dev test');
+    stdout.writeln('  dart_audit add some_pkg --force');
+    exit(0);
+  }
+
+  final rest = opts.rest;
+  if (rest.isEmpty) {
+    stderr.writeln('Error: add requires a package name argument.');
+    stderr.writeln('Usage: dart_audit add <package> [version]');
+    exit(64);
+  }
+
+  final packageName = rest[0];
+  final versionConstraint = rest.length > 1 ? rest[1] : null;
+  final isDev = opts['dev'] as bool;
+  final force = opts['force'] as bool;
+
+  stdout.writeln('dart_audit — Safe Package Addition: $packageName');
+  stdout.writeln('─' * 60);
+
+  final adder = SafePackageAdder();
+  final result = await adder.addPackage(
+    packageName: packageName,
+    versionConstraint: versionConstraint,
+    isDev: isDev,
+    force: force,
+    onStatus: (msg) => stdout.writeln('  $msg'),
+  );
+
+  stdout.writeln('─' * 60);
+
+  if (!result.installed) {
+    if (result.errorMessage != null) {
+      stderr.writeln('\x1B[31m[ERROR]\x1B[0m ${result.errorMessage}');
+    }
+    if (result.typosquatFindings.isNotEmpty) {
+      stdout.writeln('\nTyposquatting Risk:');
+      for (final f in result.typosquatFindings) {
+        stdout.writeln('  \x1B[31m[${f.severity}]\x1B[0m ${f.description}');
+      }
+    }
+    if (result.trustInfo != null && !result.trustInfo!.isTrusted) {
+      stdout.writeln('\nTrust Assessment Findings:');
+      for (final f in result.trustInfo!.findings) {
+        stdout.writeln('  \x1B[31m[${f.severity}]\x1B[0m ${f.description}');
+      }
+    }
+    if (result.inspectionReport != null && result.inspectionReport!.isSuspicious) {
+      final rep = result.inspectionReport!;
+      stdout.writeln('\nInspection Findings (Risk Score: ${rep.riskScore}):');
+      for (final f in rep.regexFindings) {
+        stdout.writeln('  \x1B[31m[${f.severity}]\x1B[0m ${f.description}');
+      }
+      for (final f in rep.entropyFindings) {
+        stdout.writeln('  \x1B[33m[${f.severity}]\x1B[0m High entropy (${f.entropy.toStringAsFixed(2)} bits) in ${f.file}:${f.line}: ${f.snippet}');
+      }
+
+      for (final f in rep.unicodeFindings) {
+        stdout.writeln('  \x1B[31m[${f.severity}]\x1B[0m ${f.description}');
+      }
+      for (final f in rep.archiveFindings) {
+        stdout.writeln('  \x1B[31m[${f.severity}]\x1B[0m ${f.description}');
+      }
+    }
+
+    stdout.writeln();
+    exit(1);
+  }
+
+  stdout.writeln('\x1B[32m✔ Package "$packageName" passed security audit and was added successfully.\x1B[0m');
+  exit(0);
+}
+
+// ── hook sub-command ───────────────────────────────────────────────────────────
+
+Future<void> _runHook(ArgResults opts, ArgParser parser, String version) async {
+  if (opts['help'] as bool) {
+    stdout.writeln('dart_audit $version hook — Install git pre-commit security hook');
+    stdout.writeln();
+    stdout.writeln('Usage: dart_audit hook [install|remove] [options]');
+    stdout.writeln();
+    stdout.writeln(parser.usage);
+    exit(0);
+  }
+
+  final remove = opts['remove'] as bool || (opts.rest.isNotEmpty && opts.rest[0] == 'remove');
+  final manager = const GitHookManager();
+
+  try {
+    if (remove) {
+      final removed = manager.removeHook();
+      if (removed) {
+        stdout.writeln('✔ Pre-commit hook removed successfully.');
+      } else {
+        stdout.writeln('No dart_audit pre-commit hook was found to remove.');
+      }
+      exit(0);
+    }
+
+    manager.installHook();
+    stdout.writeln('✔ Git pre-commit hook installed in .git/hooks/pre-commit');
+    stdout.writeln('  dart_audit will now automatically scan pubspec.yaml/pubspec.lock on git commit.');
+    exit(0);
+  } on FileSystemException catch (e) {
+    stderr.writeln('Error: ${e.message}');
+    exit(1);
+  }
+}
+
 // ── Help ───────────────────────────────────────────────────────────────────────
 
 void _printTopLevelHelp(String version, ArgParser parser) {
@@ -542,6 +695,8 @@ void _printTopLevelHelp(String version, ArgParser parser) {
   stdout.writeln('  inspect     Deep security analysis of a pub.dev package');
   stdout.writeln('  trust       Assess package trust metadata from pub.dev');
   stdout.writeln('  typosquat   Detect typosquatting and dependency confusion in dependencies');
+  stdout.writeln('  add         Safely audit and add a package to pubspec.yaml');
+  stdout.writeln('  hook        Install/remove git pre-commit security hook');
   stdout.writeln();
   stdout.writeln('Global options:');
   stdout.writeln(parser.usage);
@@ -553,4 +708,6 @@ void _printTopLevelHelp(String version, ArgParser parser) {
   stdout.writeln('  dart_audit inspect http 1.2.0            # deep inspect a package');
   stdout.writeln('  dart_audit trust http                    # check package trust');
   stdout.writeln('  dart_audit typosquat                     # check for typosquats');
+  stdout.writeln('  dart_audit add http                      # safely inspect and add package');
+  stdout.writeln('  dart_audit hook install                  # install pre-commit security hook');
 }

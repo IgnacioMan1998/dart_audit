@@ -4,14 +4,16 @@
 [![OSV.dev](https://img.shields.io/badge/powered%20by-OSV.dev-blue)](https://osv.dev)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
-Security toolkit for Dart and Flutter projects — two commands, two layers of defence:
+Security toolkit for Dart and Flutter projects — six commands for dependency and supply-chain defence:
 
 | Command                              | What it does                                                                                                                       |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `dart_audit audit`                   | Checks every dependency in `pubspec.lock` against the [OSV.dev](https://osv.dev) vulnerability database                            |
 | `dart_audit inspect <pkg> <version>` | Downloads a package from pub.dev and statically analyses its Dart source for suspicious patterns before you add it to your project |
 | `dart_audit trust <pkg>`             | Queries the pub.dev API and prints a trust assessment for a published package                                                       |
-| `dart_audit typosquat`               | Scans your `pubspec.lock` for typosquatting and dependency confusion risks                                                         |
+| `dart_audit typosquat`               | Scans your `pubspec.yaml` for typosquatting and dependency confusion risks                                                         |
+| `dart_audit add <pkg> [version]`     | Audits a package before adding its exact version to the current Dart or Flutter project                                             |
+| `dart_audit hook`                    | Installs a safe pre-commit check for staged `pubspec.yaml` and `pubspec.lock` changes                                              |
 
 ---
 
@@ -59,9 +61,22 @@ Security toolkit for Dart and Flutter projects — two commands, two layers of d
 
 ### `typosquat` — typosquatting and dependency confusion
 
-- Reads your project's `pubspec.lock` and analyses every listed dependency
+- Reads your project's `pubspec.yaml` and analyses direct and development dependency names
 - **Typosquatting detection** — Levenshtein distance matches against ~80 popular Dart/Flutter packages (distance 1 = CRITICAL, distance 2 = HIGH); detects `flutter_`/`dart_` prefix confusion attacks; flags suspicious suffixes on popular-package names
-- **Dependency confusion detection** — compares local lockfile versions against the latest pub.dev release to flag potential internal-namespace confusion attacks (version inflation)
+- **Dependency confusion detection** — checks public package metadata for suspiciously inflated release versions that can signal a dependency-confusion attack
+
+### `add` — audited dependency installation
+
+- Checks typosquatting indicators, trust metadata, and source-code findings before running `dart pub add` or `flutter pub add`.
+- Uses the latest published version when no version is supplied; supplied versions must be exact so the inspected archive matches the installed package.
+- Stops if pub.dev or source inspection is unavailable. `--force` only overrides reported security findings, never an incomplete verification.
+- Supports `--dev` to add the package under `dev_dependencies`.
+
+### `hook` — pre-commit dependency checks
+
+- Installs a hook through Git's configured hooks path, including worktrees and repositories using `core.hooksPath`.
+- Reads staged `pubspec.yaml` and `pubspec.lock` content, rather than the working tree, before allowing a commit.
+- Never overwrites an existing pre-commit hook and only removes hooks installed by `dart_audit`.
 
 ---
 
@@ -83,7 +98,7 @@ export PATH="$PATH:$HOME/.pub-cache/bin"
 
 ```yaml
 dev_dependencies:
-  dart_audit: ^0.3.0
+  dart_audit: ^0.3.1
 ```
 
 ```bash
@@ -101,7 +116,9 @@ Commands:
   audit      Scan pubspec.lock against the OSV.dev vulnerability database (default).
   inspect    Statically analyse a pub.dev package before adding it to your project.
   trust      Query the pub.dev API and print a trust assessment for a package.
-  typosquat  Scan pubspec.lock for typosquatting and dependency confusion risks.
+  typosquat  Scan pubspec.yaml for typosquatting and dependency confusion risks.
+  add        Safely audit and add a package to pubspec.yaml.
+  hook       Install or remove the pre-commit security hook.
 
 Global options:
   --no-color    Disable ANSI colours.
@@ -284,7 +301,7 @@ Verdict: ✅ TRUSTED
 ```
 Usage: dart_audit typosquat [options]
 
--l, --lockfile     Path to pubspec.lock (default: "pubspec.lock").
+    --pubspec      Path to pubspec.yaml (default: "pubspec.yaml").
 -f, --format       Output format: text (default) or json.
 -h, --help         Show this help.
 ```
@@ -295,9 +312,49 @@ Usage: dart_audit typosquat [options]
 # Scan the current project:
 dart_audit typosquat
 
-# Scan a specific lockfile:
-dart_audit typosquat --lockfile path/to/pubspec.lock
+# Scan a specific pubspec:
+dart_audit typosquat --pubspec path/to/pubspec.yaml
 ```
+
+---
+
+### `add`
+
+```
+Usage: dart_audit add <package> [version] [options]
+
+-d, --dev         Add under dev_dependencies.
+    --force       Install despite reported security findings.
+    --no-color    Disable ANSI colours.
+-h, --help        Show this help.
+```
+
+```bash
+# Audit and add the latest release:
+dart_audit add http
+
+# Audit and add an exact version:
+dart_audit add http 1.2.0
+
+# Add a development dependency:
+dart_audit add --dev test
+```
+
+`add` rejects version ranges such as `^1.2.0`: pin an exact version so the audit applies to precisely what is installed.
+
+---
+
+### `hook`
+
+```bash
+# Install the pre-commit check:
+dart_audit hook
+
+# Remove only a hook installed by dart_audit:
+dart_audit hook --remove
+```
+
+When staged dependency files change, the hook audits the staged lockfile and checks the staged pubspec for typosquatting and dependency-confusion risks. It leaves an existing pre-commit hook untouched.
 
 #### Sample output
 

@@ -89,6 +89,10 @@ class TrustScorer {
   /// Fetches trust info for [packageName] and assesses risk.
   ///
   /// Returns null if the package doesn't exist on pub.dev.
+  ///
+  /// Throws [TrustScorerException] when the metadata cannot be retrieved. A
+  /// caller performing a security gate must not treat an unavailable service as
+  /// a package that simply does not exist.
   Future<PackageTrustInfo?> assess(String packageName) async {
     try {
       // 1. Fetch package metadata.
@@ -97,7 +101,11 @@ class TrustScorer {
           .timeout(_timeout);
 
       if (metaResponse.statusCode == 404) return null;
-      if (metaResponse.statusCode != 200) return null;
+      if (metaResponse.statusCode != 200) {
+        throw TrustScorerException(
+          'pub.dev returned ${metaResponse.statusCode} while looking up "$packageName".',
+        );
+      }
 
       final meta = jsonDecode(metaResponse.body) as Map<String, dynamic>;
 
@@ -106,15 +114,20 @@ class TrustScorer {
           .get(Uri.parse('$_pubApi/packages/$packageName/score'))
           .timeout(_timeout);
 
-      Map<String, dynamic>? score;
-      if (scoreResponse.statusCode == 200) {
-        score = jsonDecode(scoreResponse.body) as Map<String, dynamic>;
+      if (scoreResponse.statusCode != 200) {
+        throw TrustScorerException(
+          'pub.dev returned ${scoreResponse.statusCode} while scoring "$packageName".',
+        );
       }
+      final score = jsonDecode(scoreResponse.body) as Map<String, dynamic>;
 
       return _analyzePackage(meta, score);
-    } catch (_) {
-      // Network errors should not block the audit.
-      return null;
+    } on TrustScorerException {
+      rethrow;
+    } catch (error) {
+      throw TrustScorerException(
+        'Could not retrieve trust metadata for "$packageName": $error',
+      );
     }
   }
 
@@ -243,4 +256,14 @@ class TrustScorer {
       findings: findings,
     );
   }
+}
+
+/// Thrown when pub.dev trust metadata cannot be retrieved or parsed.
+class TrustScorerException implements Exception {
+  TrustScorerException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }

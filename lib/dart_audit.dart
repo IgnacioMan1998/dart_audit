@@ -14,3 +14,5 @@ export 'src/inspector/pubspec_scanner.dart';
 export 'src/inspector/package_inspector.dart';
 export 'src/inspection_report_printer.dart'
     show printInspectionReport, printJsonInspectionReport;
+export 'src/git_hook_manager.dart';
+export 'src/safe_package_adder.dart';

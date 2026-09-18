@@ -1,3 +1,25 @@
+## 0.3.1
+
+### Added
+
+- **`add` sub-command** — `dart_audit add <package> [version]` audits a package before invoking `dart pub add` or `flutter pub add`:
+  - Checks typosquatting indicators, pub.dev trust metadata, and the package source with the existing inspection pipeline.
+  - Supports `--dev` for development dependencies and `--force` only for acknowledged security findings.
+  - Requires an exact version when one is supplied, ensuring the downloaded source is the same version that will be installed.
+
+- **`hook` sub-command** — `dart_audit hook` installs a pre-commit hook that checks staged `pubspec.yaml` and `pubspec.lock` files before a commit.
+
+### Fixed
+
+- Package addition now fails closed when trust metadata or source inspection cannot be completed; a network or download error can no longer result in installation.
+- Trust lookups distinguish a package missing from pub.dev from an unavailable or invalid pub.dev response.
+- Git hook installation no longer overwrites an existing hook, and removal only deletes hooks created by `dart_audit`.
+- Hooks resolve Git's configured hooks path, supporting linked worktrees and `core.hooksPath`.
+- The generated hook audits staged file contents and uses valid command-line flags.
+- Added `--no-color` support to `trust`, `typosquat`, and `hook` subcommands.
+
+---
+
 ## 0.3.0
 
 ### Added
